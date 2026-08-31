@@ -156,6 +156,48 @@ class OperationFailedError(CatiaError):
     )
 
 
+# CATIA reports geometric refusals as free text on an otherwise generic
+# HRESULT. Recognising the common ones turns "operation failed" into something
+# a caller can act on.
+GEOMETRY_HINTS: tuple[tuple[str, str], ...] = (
+    (
+        r"(?i)colinear|collinear",
+        "Two directions given to CATIA were parallel (or one was zero length), so it "
+        "could not build a plane or an axis from them. Check any direction vectors, "
+        "axis references or three-point constructions in the call - three points on a "
+        "straight line define no plane, and two parallel edges define no axis system.",
+    ),
+    (
+        r"(?i)not closed|open profile",
+        "The profile is not closed. catia_sketch_geometry lists the sketch elements; the "
+        "rectangle, polygon and polyline tools weld their corner points explicitly, so "
+        "prefer those over drawing separate lines.",
+    ),
+    (
+        r"(?i)self.?intersect",
+        "The profile intersects itself. Simplify it, or build the shape from two features.",
+    ),
+    (
+        r"(?i)no (solid|material)|empty result",
+        "The operation produced no material. Check the direction and depth - a pocket "
+        "that misses the solid entirely fails this way.",
+    ),
+    (
+        r"(?i)radius.*too|too (large|big)",
+        "The value is too large for the surrounding geometry. catia_list_edges reports "
+        "each edge's length as a rough ceiling for a fillet radius.",
+    ),
+)
+
+
+def geometry_hint(text: str) -> str:
+    """Map CATIA's own wording onto actionable advice, when it is recognisable."""
+    for pattern, advice in GEOMETRY_HINTS:
+        if re.search(pattern, text):
+            return advice
+    return ""
+
+
 def hresult_of(exc: BaseException) -> int | None:
     """Extract the HRESULT from a pywin32 com_error, if there is one."""
     args = getattr(exc, "args", None)
@@ -244,4 +286,8 @@ def translate(exc: BaseException) -> CatiaError:
     if scode is not None and scode != hr:
         details["scode"] = "0x%08X" % (scode & 0xFFFFFFFF)
 
-    return OperationFailedError(text or str(exc), details=details)
+    failure = OperationFailedError(text or str(exc), details=details)
+    hint = geometry_hint(text or str(exc))
+    if hint:
+        failure.remediation = hint
+    return failure

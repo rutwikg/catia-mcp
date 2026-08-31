@@ -8,6 +8,7 @@ is reported against the right thing rather than surfacing three calls later.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated, Any
 
 from pydantic import Field
@@ -27,22 +28,51 @@ LIMIT_MODES = {
 }
 
 
+def discard_failed(session: Any, feature: Any, name: str) -> bool:
+    """Remove a feature whose update failed, restoring the previous good state.
+
+    A feature left in error keeps failing every subsequent ``Update()``, and
+    CATIA raises each of those as a modal dialog that blocks all further
+    automation - so one bad call otherwise wedges the whole session. Set
+    CATIA_MCP_KEEP_FAILED_FEATURES=1 to keep them for debugging instead.
+    """
+    if os.environ.get("CATIA_MCP_KEEP_FAILED_FEATURES", "").strip() not in ("", "0", "false"):
+        return False
+    try:
+        selection = session.selection()
+        selection.Clear()
+        selection.Add(feature)
+        selection.Delete()
+        selection.Clear()
+        return True
+    except Exception as exc:
+        logger.info("Could not remove the failed feature %r: %s", name, exc)
+        return False
+
+
 def finish(session: Any, part: Any, feature: Any, kind: str, name: str = "") -> dict[str, Any]:
     """Name, update and summarise a freshly created feature."""
     final_name = rename(feature, name)
     try:
         part.UpdateObject(feature)
     except Exception as exc:
+        removed = discard_failed(session, feature, final_name or kind)
         raise errors.OperationFailedError(
             "CATIA created %s but could not compute it: %s"
             % (final_name or kind, errors.com_message(exc)),
             remediation=(
-                "The feature is now in the tree but in error. Either fix the inputs and "
-                "retry, or remove it with catia_delete_element. Common causes: an open or "
-                "self-intersecting profile, a value larger than the surrounding geometry "
-                "allows, or a limit surface the extrusion never reaches."
+                (
+                    "The feature has been removed, so the model is back in its previous "
+                    "state and safe to keep working in. "
+                    if removed
+                    else "The feature is still in the tree but in error; remove it with "
+                    "catia_delete_element before continuing. "
+                )
+                + "Common causes: an open or self-intersecting profile, a value larger "
+                "than the surrounding geometry allows, or a limit surface the extrusion "
+                "never reaches."
             ),
-            details={"feature": final_name, "kind": kind},
+            details={"feature": final_name, "kind": kind, "rolled_back": removed},
         ) from exc
     session.state.note_feature(final_name)
     session.refresh_view()

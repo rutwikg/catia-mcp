@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.0.1
+
+### Fixed
+
+- **`catia_create_sketch` could crash CATIA when given `origin` or
+  `horizontal_direction`.** `_apply_axis_data` read the sketch's current axis
+  with `out_doubles(...)` but without `app=`, so there was no script-bridge
+  fallback; when the by-reference write did not land, `out_doubles` returned
+  nine zeros and - with no `app` to cross-check against - accepted them. Only
+  the caller's origin was then overwritten, leaving the H and V directions at
+  `(0,0,0)`: zero length and mutually colinear. `SetAbsoluteAxisData` stores
+  whatever it is given and reports success, so the failure surfaced later at
+  `Update()` as a modal *"Colinear directions : cannot build a plane or an
+  axis"* dialog, which blocks every subsequent COM call and leaves the session
+  wedged.
+
+  The read now passes `app=` so it can fall back to the script bridge; an axis
+  that cannot be read, or that reads back as degenerate, is refused instead of
+  written; a supplied H direction is projected into the sketch plane with V
+  re-derived from the plane normal, so the pair is orthogonal by construction;
+  and a direction that is zero, or perpendicular to the plane, is rejected with
+  an explanation rather than passed through. A sketch that cannot be positioned
+  is removed rather than left behind in a state that would fail the next update.
+
+- **A feature whose update failed was left in the tree**, so every later
+  `Update()` re-raised the same modal dialog and one bad call wedged the whole
+  session. Failed features and GSD elements are now rolled back, returning the
+  model to its previous good state; the result says whether the rollback
+  happened. Set `CATIA_MCP_KEEP_FAILED_FEATURES=1` to keep them for debugging.
+
+- **`catia_gsd_axis_system` accepted colinear or zero-length axes**, which CATIA
+  stores without complaint and rejects at update time. They are now validated
+  up front and reported as `invalid_argument`.
+
+### Added
+
+- `catia_mcp/core/vectors.py`: degeneracy checks used to keep unbuildable
+  direction pairs away from CATIA. `are_parallel` normalises before taking the
+  cross product, so the answer does not depend on vector length - a naive
+  `magnitude(cross(a, b)) < tol` test wrongly calls two small perpendicular
+  vectors parallel.
+- CATIA's own wording for common geometric refusals - colinear directions, open
+  profiles, self-intersections, empty results, oversized values - is now
+  recognised and turned into targeted remediation text.
+- 15 further tests, including one that reproduces the exact crash: a
+  by-reference read that never lands must never be written back.
+
+
 ## 1.0.0
 
 First release. A ground-up implementation, written after reviewing

@@ -446,3 +446,246 @@ def test_assembly_constraint_table_is_self_consistent():
     for name, spec in CONSTRAINT_KINDS.items():
         assert spec["elements"] in (1, 2), name
         constants.const(spec["const"])
+
+
+# ── degenerate geometry: the "Colinear directions" crash ─────────────────────
+
+def test_vector_basics():
+    from catia_mcp.core import vectors
+
+    assert vectors.magnitude([3.0, 4.0, 0.0]) == pytest.approx(5.0)
+    assert vectors.normalize([0.0, 0.0, 2.0]) == pytest.approx([0.0, 0.0, 1.0])
+    assert vectors.normalize([0.0, 0.0, 0.0]) is None
+    assert vectors.is_zero([0.0, 0.0, 0.0])
+    assert vectors.as_vector(None) == [0.0, 0.0, 0.0]
+    assert vectors.as_vector([1.0]) == [1.0, 0.0, 0.0]
+    assert vectors.dot([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]) == pytest.approx(32.0)
+
+
+def test_are_parallel_is_scale_invariant():
+    from catia_mcp.core import vectors
+
+    # A naive magnitude(cross(a, b)) < tol test calls these parallel because the
+    # vectors are tiny, not because their directions align. Normalising first is
+    # what makes the answer independent of length.
+    assert not vectors.are_parallel([1e-4, 0.0, 0.0], [0.0, 1e-4, 0.0])
+    assert vectors.are_parallel([1.0, 0.0, 0.0], [7.5, 0.0, 0.0])
+    assert vectors.are_parallel([1.0, 0.0, 0.0], [-3.0, 0.0, 0.0])
+    assert vectors.are_parallel([0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
+    assert not vectors.are_parallel([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+
+
+def test_reject_projects_into_the_plane():
+    from catia_mcp.core import vectors
+
+    assert vectors.reject([1.0, 0.0, 5.0], [0.0, 0.0, 1.0]) == pytest.approx([1.0, 0.0, 0.0])
+    assert vectors.is_zero(vectors.reject([0.0, 0.0, 3.0], [0.0, 0.0, 1.0]))
+
+
+def test_check_direction_pair_names_the_problem():
+    from catia_mcp.core import vectors
+
+    assert vectors.check_direction_pair(
+        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], first_label="x", second_label="y"
+    ) == ""
+    zero = vectors.check_direction_pair(
+        [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], first_label="x", second_label="y"
+    )
+    assert "zero-length" in zero and "x" in zero
+    assert "colinear" in vectors.check_direction_pair(
+        [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], first_label="x", second_label="y"
+    )
+
+
+def test_colinear_com_error_gets_a_targeted_remediation():
+    """The exact message from the reported crash must produce actionable advice."""
+    exc = FakeComError(
+        -2147467259,
+        "Internal Update Error",
+        "Colinear directions : cannot build a plane or an axis.",
+    )
+    translated = errors.translate(exc)
+    assert translated.code == "operation_failed"
+    assert "parallel" in translated.remediation
+    assert "three points on a straight line" in translated.remediation
+
+
+def test_geometry_hints_cover_the_common_catia_refusals():
+    assert "not closed" in errors.geometry_hint("The profile is not closed").lower()
+    assert errors.geometry_hint("something entirely unrelated") == ""
+
+
+class FakeSketch:
+    def __init__(self):
+        self.written = None
+
+    def SetAbsoluteAxisData(self, data):
+        self.written = list(data)
+
+
+class FakeSession:
+    """Just enough session for the axis logic; `app` stands in for the CATIA object."""
+
+    app = "catia-application"
+
+    def __init__(self):
+        self.state = type("State", (), {"last_sketch_name": ""})()
+
+
+@pytest.fixture
+def axis_read(monkeypatch):
+    """Control what GetAbsoluteAxisData appears to return, and record the call."""
+    calls: list[dict] = []
+
+    def install(values):
+        def fake_out_doubles(obj, method, count, *, app=None, args=()):
+            calls.append({"method": method, "count": count, "app": app})
+            if values is None:
+                raise errors.UnsupportedCapabilityError("by-reference read did not work")
+            return list(values)
+
+        monkeypatch.setattr(comutil, "out_doubles", fake_out_doubles)
+        return calls
+
+    return install
+
+
+XY_AXIS = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+
+def test_axis_read_now_uses_the_script_bridge_fallback(axis_read):
+    """Regression: the read was made without app=, so it had no fallback."""
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    calls = axis_read(XY_AXIS)
+    session = FakeSession()
+    _apply_axis_data(session, FakeSketch(), [1.0, 2.0, 3.0], None)
+    assert calls[0]["method"] == "GetAbsoluteAxisData"
+    assert calls[0]["count"] == 9
+    assert calls[0]["app"] == session.app, "must pass app= so out_doubles can fall back"
+
+
+def test_all_zero_axis_read_is_refused_not_written(axis_read):
+    """The exact bug that crashed CATIA.
+
+    A by-reference read that never landed returns nine zeros. Writing that back
+    leaves H and V as (0,0,0) - zero length and mutually colinear - which CATIA
+    accepts silently and then rejects at Update() with a modal dialog.
+    """
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    axis_read([0.0] * 9)
+    sketch = FakeSketch()
+    with pytest.raises(errors.CatiaError) as caught:
+        _apply_axis_data(FakeSession(), sketch, [0.0, 0.0, 40.0], None)
+    assert sketch.written is None, "a degenerate axis must never be written"
+    assert "do not define a plane" in str(caught.value)
+    assert caught.value.remediation
+
+
+def test_unreadable_axis_is_refused_not_written(axis_read):
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    axis_read(None)
+    sketch = FakeSketch()
+    with pytest.raises(errors.CatiaError):
+        _apply_axis_data(FakeSession(), sketch, [0.0, 0.0, 40.0], None)
+    assert sketch.written is None
+
+
+def test_origin_move_preserves_the_plane_directions(axis_read):
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    axis_read(XY_AXIS)
+    sketch = FakeSketch()
+    assert _apply_axis_data(FakeSession(), sketch, [10.0, 20.0, 30.0], None) is True
+    assert sketch.written[0:3] == pytest.approx([10.0, 20.0, 30.0])
+    assert sketch.written[3:9] == pytest.approx(XY_AXIS[3:9])
+
+
+def test_new_h_axis_is_projected_into_the_plane_and_v_rederived(axis_read):
+    from catia_mcp.core import vectors
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    axis_read(XY_AXIS)
+    sketch = FakeSketch()
+    # 45 degrees in plane, with a stray out-of-plane Z component that must be dropped.
+    assert _apply_axis_data(FakeSession(), sketch, None, [1.0, 1.0, 9.0]) is True
+    h, v = sketch.written[3:6], sketch.written[6:9]
+    assert h == pytest.approx([0.7071068, 0.7071068, 0.0], abs=1e-6)
+    assert vectors.dot(h, v) == pytest.approx(0.0, abs=1e-9)
+    assert vectors.magnitude(v) == pytest.approx(1.0)
+    assert not vectors.are_parallel(h, v)
+
+
+def test_h_axis_normal_to_the_plane_is_rejected(axis_read):
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    axis_read(XY_AXIS)
+    sketch = FakeSketch()
+    with pytest.raises(errors.InvalidArgumentError) as caught:
+        _apply_axis_data(FakeSession(), sketch, None, [0.0, 0.0, 1.0])
+    assert "perpendicular to the sketch plane" in str(caught.value)
+    assert sketch.written is None
+
+
+def test_zero_h_axis_is_rejected(axis_read):
+    from catia_mcp.tools.sketch import _apply_axis_data
+
+    axis_read(XY_AXIS)
+    sketch = FakeSketch()
+    with pytest.raises(errors.InvalidArgumentError):
+        _apply_axis_data(FakeSession(), sketch, None, [0.0, 0.0, 0.0])
+    assert sketch.written is None
+
+
+@pytest.fixture
+def offline_tools(monkeypatch):
+    """Every registered tool, callable with no CATIA and no COM apartment.
+
+    The registrar normally connects first and dispatches onto the apartment
+    thread. Both are stubbed here so a tool body runs inline, which is what lets
+    argument validation be tested on any platform.
+    """
+    from catia_mcp.core.connection import SESSION
+    from catia_mcp.server import build_server
+
+    monkeypatch.setattr(SESSION, "ensure", lambda: None)
+    monkeypatch.setattr(SESSION, "call", lambda fn, *a, **kw: fn(*a, **kw))
+
+    tools: dict = {}
+
+    class Collector:
+        def tool(self, **kwargs):
+            def decorate(fn):
+                tools[kwargs["name"]] = fn
+                return fn
+
+            return decorate
+
+    build_server(Collector())
+    return tools
+
+
+def test_axis_system_tool_validates_before_touching_catia(offline_tools):
+    """catia_gsd_axis_system must reject a colinear pair as invalid_argument.
+
+    Validation has to happen before the call reaches CATIA: CATIA stores the
+    directions without complaint and only fails at Update(), by which point the
+    error is a modal dialog rather than a return value.
+    """
+    payload = offline_tools["catia_gsd_axis_system"](
+        x_direction=[1.0, 0.0, 0.0], y_direction=[-2.0, 0.0, 0.0]
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "colinear" in payload["error"]["message"]
+
+
+def test_axis_system_tool_rejects_a_zero_direction(offline_tools):
+    payload = offline_tools["catia_gsd_axis_system"](
+        x_direction=[0.0, 0.0, 0.0], y_direction=[0.0, 1.0, 0.0]
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "zero-length" in payload["error"]["message"]

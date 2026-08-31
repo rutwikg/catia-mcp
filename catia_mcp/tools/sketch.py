@@ -18,7 +18,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from catia_mcp.core import comutil, constants, errors, refs, result
+from catia_mcp.core import comutil, constants, errors, refs, result, vectors
 from catia_mcp.tools.base import registrar, rename
 
 logger = logging.getLogger("catia_mcp.tools.sketch")
@@ -26,6 +26,12 @@ logger = logging.getLogger("catia_mcp.tools.sketch")
 # The apartment thread is the only thread that touches these, so plain
 # module-level state is safe.
 _OPEN: dict[str, Any] = {"sketch": None, "factory": None, "name": ""}
+
+_AXIS_FALLBACK = (
+    "Create the sketch without origin/horizontal_direction and draw the geometry at the "
+    "offset you want instead, or make a construction plane with catia_gsd_plane "
+    "(mode='offset') and sketch on that. Both avoid touching the sketch axis system."
+)
 
 CONSTRAINT_KINDS: dict[str, dict[str, Any]] = {
     "horizontal": {"const": "catCstTypeHorizontality", "elements": 1, "dimensioned": False},
@@ -236,8 +242,14 @@ def register(mcp: Any, session: Any) -> None:
             ) from exc
 
         warnings: list[str] = []
-        if origin or horizontal_direction:
-            applied = _apply_axis_data(sketch, origin, horizontal_direction)
+        if origin is not None or horizontal_direction is not None:
+            try:
+                applied = _apply_axis_data(session, sketch, origin, horizontal_direction)
+            except errors.CatiaError:
+                # A sketch whose axis could not be set would fail the next
+                # update with a modal dialog, so remove it and report why.
+                _discard_sketch(session, sketch)
+                raise
             if not applied:
                 warnings.append(
                     "Could not reposition the sketch axis; it stays at the support's origin."
@@ -920,6 +932,24 @@ def _closed_polyline(factory: Any, pairs: list[tuple[float, float]]) -> list[str
     return names
 
 
+def _discard_sketch(session: Any, sketch: Any) -> None:
+    """Remove a sketch we are abandoning, so no broken feature is left behind."""
+    reset_edition_state()
+    try:
+        sketch.CloseEdition()
+    except Exception:
+        pass
+    try:
+        selection = session.selection()
+        selection.Clear()
+        selection.Add(sketch)
+        selection.Delete()
+        selection.Clear()
+    except Exception as exc:
+        logger.info("Could not remove the abandoned sketch: %s", exc)
+    session.state.last_sketch_name = ""
+
+
 def _point_coords(point: Any) -> dict[str, float] | None:
     if point is None:
         return None
@@ -934,23 +964,99 @@ def _point_coords(point: Any) -> dict[str, float] | None:
 
 
 def _apply_axis_data(
-    sketch: Any, origin: list[float] | None, horizontal: list[float] | None
+    session: Any, sketch: Any, origin: list[float] | None, horizontal: list[float] | None
 ) -> bool:
-    """Reposition a sketch's axis system in 3D, via SetAbsoluteAxisData."""
-    current = [0.0] * 9
-    try:
-        current = list(comutil.out_doubles(sketch, "GetAbsoluteAxisData", 9))
-    except Exception:
-        pass
+    """Reposition a sketch's axis system in 3D, via SetAbsoluteAxisData.
 
-    data = list(current) if len(current) == 9 else [0.0] * 9
-    if origin and len(origin) >= 3:
-        data[0:3] = [float(v) for v in origin[:3]]
-    if horizontal and len(horizontal) >= 3:
-        vector = [float(v) for v in horizontal[:3]]
-        norm = math.sqrt(sum(v * v for v in vector))
-        if norm > 1e-9:
-            data[3:6] = [v / norm for v in vector]
+    ``GetAbsoluteAxisData`` returns nine doubles: the origin, then the H
+    direction, then the V direction. Every one of them has to be valid, because
+    CATIA does not validate what is written - it stores the numbers, reports
+    success, and only fails later during ``Update()``, as a modal
+    "Colinear directions : cannot build a plane or an axis" dialog that blocks
+    all further automation.
+
+    So this refuses to write anything it cannot show is well formed: the
+    current axis must be readable, and a caller-supplied H direction is
+    projected into the sketch plane with V re-derived from the plane normal,
+    which keeps the pair orthogonal by construction.
+    """
+    try:
+        current = list(
+            comutil.out_doubles(sketch, "GetAbsoluteAxisData", 9, app=session.app)
+        )
+    except Exception as exc:
+        raise errors.OperationFailedError(
+            "Could not read the sketch's current axis system (%s), so it cannot be "
+            "repositioned safely." % errors.com_message(exc),
+            remediation=_AXIS_FALLBACK,
+        ) from exc
+
+    if len(current) != 9:
+        raise errors.OperationFailedError(
+            "CATIA returned %d values for the sketch axis instead of 9." % len(current),
+            remediation=_AXIS_FALLBACK,
+        )
+
+    h_axis = current[3:6]
+    v_axis = current[6:9]
+    normal = vectors.unit_cross(h_axis, v_axis)
+    if normal is None:
+        # An all-zero read is indistinguishable from a by-reference write that
+        # never landed. Either way there is no sound basis to write from.
+        raise errors.OperationFailedError(
+            "The sketch's current axis directions read back as %s and %s, which do not "
+            "define a plane. Repositioning from that would leave CATIA with colinear "
+            "directions and fail the next update."
+            % (vectors.describe(h_axis), vectors.describe(v_axis)),
+            remediation=_AXIS_FALLBACK,
+        )
+
+    data = list(current)
+
+    if origin is not None:
+        point = vectors.as_vector(origin)
+        if len(list(origin)) < 3:
+            raise errors.InvalidArgumentError(
+                "origin needs three numbers [x, y, z]; got %r." % (origin,)
+            )
+        data[0:3] = point
+
+    if horizontal is not None:
+        if len(list(horizontal)) < 3:
+            raise errors.InvalidArgumentError(
+                "horizontal_direction needs three numbers [x, y, z]; got %r." % (horizontal,)
+            )
+        wanted = vectors.as_vector(horizontal)
+        if vectors.is_zero(wanted):
+            raise errors.InvalidArgumentError(
+                "horizontal_direction %s is a zero-length vector, which has no direction."
+                % vectors.describe(wanted)
+            )
+        in_plane = vectors.normalize(vectors.reject(wanted, normal))
+        if in_plane is None:
+            raise errors.InvalidArgumentError(
+                "horizontal_direction %s is perpendicular to the sketch plane (normal %s), "
+                "so it has no component lying in it. The H axis must lie *in* the sketch "
+                "plane." % (vectors.describe(wanted), vectors.describe(normal)),
+                remediation=(
+                    "Pick a direction in the plane - for a sketch on 'xy' that means a "
+                    "vector with a non-zero X or Y component - or sketch on a different "
+                    "support."
+                ),
+            )
+        new_v = vectors.unit_cross(normal, in_plane)
+        if new_v is None:  # pragma: no cover - unreachable given the checks above
+            raise errors.InvalidArgumentError(
+                "Could not derive a V axis perpendicular to %s." % vectors.describe(in_plane)
+            )
+        data[3:6] = in_plane
+        data[6:9] = new_v
+
+    problem = vectors.check_direction_pair(
+        data[3:6], data[6:9], first_label="the sketch H axis", second_label="the V axis"
+    )
+    if problem:  # pragma: no cover - the construction above rules this out
+        raise errors.InvalidArgumentError(problem, remediation=_AXIS_FALLBACK)
 
     try:
         sketch.SetAbsoluteAxisData(comutil.in_doubles(data))

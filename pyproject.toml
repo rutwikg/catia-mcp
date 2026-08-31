@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "catia-mcp"
-version = "1.0.0"
+version = "1.0.1"
 description = "Version-adaptive MCP server for CATIA (V5 and compatible releases) over COM automation"
 readme = "README.md"
 requires-python = ">=3.10"

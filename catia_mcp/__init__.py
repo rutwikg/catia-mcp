@@ -7,5 +7,5 @@ thread, guarded by busy-retry logic, and described by a structured result
 envelope so that a language model can chain calls reliably.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = ["__version__"]

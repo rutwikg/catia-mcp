@@ -16,7 +16,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from catia_mcp.core import comutil, errors, refs, result
+from catia_mcp.core import comutil, errors, refs, result, vectors
 from catia_mcp.tools.base import registrar, rename, set_parameter_value
 from catia_mcp.tools.sketch import ensure_closed
 
@@ -76,14 +76,24 @@ def _place(
     try:
         part.UpdateObject(shape)
     except Exception as exc:
+        from catia_mcp.tools.part_design import discard_failed
+
+        removed = discard_failed(session, shape, final or kind)
         raise errors.OperationFailedError(
             "CATIA created %s but could not compute it: %s"
             % (final or kind, errors.com_message(exc)),
             remediation=(
-                "The element is in the tree but in error. Check that its inputs still "
-                "exist and are compatible, then delete it with catia_delete_element or "
-                "recreate it with corrected references."
+                (
+                    "The element has been removed, so the model is back in its previous "
+                    "state. "
+                    if removed
+                    else "The element is still in the tree but in error; delete it with "
+                    "catia_delete_element before continuing. "
+                )
+                + "Check that its inputs still exist, are compatible, and are not "
+                "colinear or coincident, then recreate it with corrected references."
             ),
+            details={"element": final or kind, "kind": kind, "rolled_back": removed},
         ) from exc
 
     session.state.note_feature(final)
@@ -1325,6 +1335,22 @@ def register(mcp: Any, session: Any) -> None:
         ] = False,
     ) -> dict:
         ensure_closed(session)
+        # Validate before creating: CATIA stores whatever directions it is given
+        # and only rejects them at update time, as a modal dialog.
+        problem = vectors.check_direction_pair(
+            x_direction,
+            y_direction,
+            first_label="x_direction",
+            second_label="y_direction",
+        )
+        if problem:
+            raise errors.InvalidArgumentError(
+                problem,
+                remediation=(
+                    "Give two directions that are not parallel - the defaults [1,0,0] and "
+                    "[0,1,0] are a safe starting point. The Z axis is derived from them."
+                ),
+            )
         part = session.active_part()
         systems = comutil.safe(part, "AxisSystems")
         if systems is None:
