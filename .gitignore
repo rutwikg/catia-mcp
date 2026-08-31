@@ -11,3 +11,6 @@ catia_mcp.log
 *.CATPart
 *.CATProduct
 *.CATDrawing
+
+# Written by scripts/install_client_config.py --target project; machine-specific.
+.mcp.json

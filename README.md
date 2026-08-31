@@ -211,13 +211,37 @@ Add `--close` to discard the scratch part afterwards.
 
 ## Wire it to a client
 
-Claude Desktop (`claude_desktop_config.json`) or any MCP client:
+The simplest route, which needs no extra tooling:
+
+```bash
+python scripts/install_client_config.py --dry-run
+```
+
+```bash
+python scripts/install_client_config.py
+```
+
+It writes the entry into the Claude desktop app's `claude_desktop_config.json`,
+backing the file up first. `--target code` targets Claude Code's `~/.claude.json`
+instead, `--target project` writes a `.mcp.json` beside the repository,
+`--target all` does every one, and `--remove` undoes it. The interpreter it
+records is **the one you ran it with** — which is the one that has `pywin32` and
+`mcp` installed, and the usual cause of a server that starts and then cannot do
+anything.
+
+> `claude mcp add` will not work unless you have separately installed the Claude
+> Code CLI (`npm install -g @anthropic-ai/claude-code`). It is a different
+> package from the desktop app. The script above avoids needing it.
+
+To write the configuration by hand instead, add this to
+`claude_desktop_config.json` — on Windows at
+`%APPDATA%\Claude\claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "catia": {
-      "command": "python",
+      "command": "C:\\path\\to\\python.exe",
       "args": ["-m", "catia_mcp"],
       "env": { "PYTHONPATH": "C:\\path\\to\\catia-mcp" }
     }
@@ -225,11 +249,9 @@ Claude Desktop (`claude_desktop_config.json`) or any MCP client:
 }
 ```
 
-Claude Code:
-
-```bash
-claude mcp add catia -- python -m catia_mcp
-```
+Use the **full path** to the interpreter you installed the dependencies into,
+not bare `python`; the client does not inherit your shell's PATH. Restart the
+client afterwards.
 
 An HTTP transport is available for remote or multi-client use:
 
@@ -335,8 +357,9 @@ catia_mcp/
     result.py             the result envelope
   tools/                  14 tool modules, one per domain
 scripts/
-  protocol_check.py       MCP conformance check, no CATIA needed
-  live_smoke.py           end-to-end build against a real CATIA
+  install_client_config.py  register the server with an MCP client
+  protocol_check.py         MCP conformance check, no CATIA needed
+  live_smoke.py             end-to-end build against a real CATIA
 tests/test_offline.py     36 tests, no CATIA and no Windows required
 ```
 
