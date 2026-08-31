@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "catia-mcp"
+version = "1.0.0"
+description = "Version-adaptive MCP server for CATIA (V5 and compatible releases) over COM automation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = [
+    "catia", "catia-v5", "mcp", "model-context-protocol", "cad", "com",
+    "automation", "dassault-systemes", "claude",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "mcp>=1.2",
+    "pydantic>=2.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+# Pillow lets catia_screenshot return a downscaled PNG rather than CATIA's
+# raw capture. Without it screenshots still work, just larger.
+images = ["pillow>=10.0"]
+dev = ["pytest>=7.0", "ruff>=0.4.0"]
+
+[project.scripts]
+catia-mcp = "catia_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["catia_mcp*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # long lines are handled by the formatter
+    "B008",   # pydantic Field() in a default is the documented pattern here
+    "B006",   # a few list defaults are deliberate, documented and never mutated
+    "UP031",  # printf-style formatting is used consistently throughout
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

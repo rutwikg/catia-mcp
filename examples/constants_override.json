@@ -1,0 +1,6 @@
+{
+  "_comment": "Point CATIA_MCP_CONSTANTS at a file like this to correct an enumeration value for an unusual CATIA release, without patching code. Only names that already exist in catia_mcp/core/constants.py are honoured; run 'python -c \"from catia_mcp.core import constants; print(constants.all_constants())\"' to see them.",
+  "catTangencyFilletEdgePropagation": 1,
+  "catTwoLengthChamfer": 1,
+  "catLengthAngleChamfer": 2
+}

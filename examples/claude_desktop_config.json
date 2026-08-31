@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "catia": {
+      "command": "python",
+      "args": [
+        "-m",
+        "catia_mcp"
+      ],
+      "env": {
+        "PYTHONPATH": "C:\\path\\to\\catia-mcp",
+        "CATIA_MCP_LOG": "C:\\path\\to\\catia-mcp\\catia_mcp.log",
+        "CATIA_MCP_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}

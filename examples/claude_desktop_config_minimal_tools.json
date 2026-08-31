@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "catia": {
+      "command": "python",
+      "args": [
+        "-m",
+        "catia_mcp"
+      ],
+      "env": {
+        "PYTHONPATH": "C:\\path\\to\\catia-mcp",
+        "CATIA_MCP_GROUPS": "document,tree,sketch,part_design,dressup,measure,view"
+      }
+    }
+  }
+}
