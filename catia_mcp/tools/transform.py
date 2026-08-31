@@ -87,6 +87,16 @@ def register(mcp: Any, session: Any) -> None:
         name: Annotated[str, Field(description="Name for the resulting feature.")] = "",
     ) -> dict:
         ensure_closed(session)
+        if direction_1 and direction_2 and direction_1.strip() == direction_2.strip():
+            raise errors.InvalidArgumentError(
+                "direction_1 and direction_2 are the same reference (%r), so they are "
+                "colinear and CATIA cannot build a grid from them." % direction_1,
+                remediation=(
+                    "Pass two non-parallel references - catia_list_edges will show edges "
+                    "along different axes - or leave direction_2 empty for a single-row "
+                    "pattern with instances_2=1."
+                ),
+            )
         part = session.active_part()
         factory = session.shape_factory()
         item = _item_to_pattern(session, part, feature)

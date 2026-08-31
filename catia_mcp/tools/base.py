@@ -77,7 +77,7 @@ def registrar(mcp: Any, session: Any) -> Callable[..., Callable[[Callable], Call
 
                 return session.call(body)
 
-            guarded = result.tool(entry)
+            guarded = result.tool(entry, name)
 
             kwargs: dict[str, Any] = {"name": name, "description": description}
             if ToolAnnotations is not None:

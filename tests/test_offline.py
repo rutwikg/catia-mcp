@@ -689,3 +689,55 @@ def test_axis_system_tool_rejects_a_zero_direction(offline_tools):
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_argument"
     assert "zero-length" in payload["error"]["message"]
+
+
+def test_failures_identify_the_tool_and_arguments(offline_tools):
+    """A failure has to say which call produced it, without needing the log."""
+    payload = offline_tools["catia_gsd_axis_system"](
+        x_direction=[1.0, 0.0, 0.0], y_direction=[3.0, 0.0, 0.0], name="Bad"
+    )
+    error = payload["error"]
+    assert error["tool"] == "catia_gsd_axis_system"
+    assert error["arguments"]["y_direction"] == [3.0, 0.0, 0.0]
+    assert error["arguments"]["name"] == "Bad"
+
+
+def test_argument_summary_drops_defaults_and_caps_size():
+    arguments = {
+        "kept": 5,
+        "empty_string": "",
+        "none_value": None,
+        "empty_list": [],
+        "long": "x" * 500,
+    }
+    summary = result.summarise_arguments(arguments)
+    assert summary["kept"] == 5
+    assert "empty_string" not in summary
+    assert "none_value" not in summary
+    assert "empty_list" not in summary
+    assert len(repr(summary)) < 600
+
+
+def test_zero_direction_vector_is_rejected_before_reaching_catia():
+    """AddNewDirectionByCoord(0, 0, 0) is another route to the colinear dialog.
+
+    Checked against the helper rather than a tool, because every GSD tool
+    resolves the part before it builds a direction.
+    """
+    from catia_mcp.tools.gsd import _direction
+
+    with pytest.raises(errors.InvalidArgumentError) as caught:
+        _direction(None, None, None, [0.0, 0.0, 0.0])
+    assert "zero length" in str(caught.value)
+
+    with pytest.raises(errors.InvalidArgumentError):
+        _direction(None, None, None, [1.0, 2.0])
+
+
+def test_rect_pattern_rejects_two_identical_directions(offline_tools):
+    payload = offline_tools["catia_rect_pattern"](
+        direction_1="edge#1", direction_2="edge#1", instances_2=3
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "colinear" in payload["error"]["message"]

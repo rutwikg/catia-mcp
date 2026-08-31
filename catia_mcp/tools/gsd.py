@@ -114,6 +114,14 @@ def _direction(session: Any, part: Any, hsf: Any, spec: Any) -> Any:
         values = [float(v) for v in spec][:3]
         if len(values) != 3:
             raise errors.InvalidArgumentError("A direction vector needs three numbers.")
+        if vectors.is_zero(values):
+            # CATIA accepts this and then fails at update time with
+            # "cannot build a plane or an axis", as a modal dialog.
+            raise errors.InvalidArgumentError(
+                "The direction vector %s has zero length, so it has no direction."
+                % vectors.describe(values),
+                remediation="Give a non-zero vector, for example [0, 0, 1] for the Z axis.",
+            )
         _, direction = comutil.try_variants(
             [
                 (
