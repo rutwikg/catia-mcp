@@ -209,6 +209,19 @@ PASS / FAIL / SKIP per step. Steps needing a licence you do not have are
 reported as SKIP, so the output doubles as a capability report for your seat.
 Add `--close` to discard the scratch part afterwards.
 
+## Drive it by hand
+
+The MCP Inspector gives you a browser UI over every tool — pick one, fill in
+its arguments from a generated form, fire it, and read the raw JSON-RPC:
+
+```bash
+npx @modelcontextprotocol/inspector uv run python catia_mcp/server.py
+```
+
+This is the fastest way to isolate a problem, because there is no model in the
+loop deciding anything: you supply the exact arguments and see the exact
+result. `--cli` and `--tui` give the same thing headless and in the terminal.
+
 ## Wire it to a client
 
 The simplest route, which needs no extra tooling:
