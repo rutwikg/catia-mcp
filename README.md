@@ -24,43 +24,45 @@ catia_connect → catia_new_part → catia_create_sketch(support="xy")
 
 ## Why this exists
 
-It began as a rewrite of
-[an earlier implementation](https://example.invalid/prior-art).
-Reading that code turned up several problems that are worth stating plainly,
-because they are the same problems any CATIA client has to solve:
+Driving CATIA from a script means solving five problems. None of them are
+exotic — every client that talks to CATIA over COM meets them — but each one
+fails *quietly*, which is what makes them expensive:
 
-**1. Measurements silently returned zeros.**
+**1. Measurements silently return zeros.**
 CATIA declares `Measurable::GetCOG`, `GetInertia`, `GetBoundingBox` and
 `Product::Position::GetComponents` as taking an `[in]` array that it then writes
 into. Hand a late-bound Python list to one of those and CATIA fills a *copy* —
 the call succeeds, and the caller reads back the zeros it passed in. Centre of
-gravity, inertia, bounding boxes and component positions were all affected.
+gravity, inertia, bounding boxes and component positions are all affected.
 This server reads those arrays through a `VT_BYREF` VARIANT, and cross-checks
 an all-zero answer against a VBScript trampoline evaluated inside CATIA before
 believing it.
 
-**2. Fillet and chamfer ignored the edge you named.**
-Both tools accepted an `edge_name` argument and then filleted the last feature
-in the body regardless. There was no topological selection at all.
+**2. Naming an edge is not the same as selecting it.**
+CATIA's own handle for a face or an edge is a BRep name like
+`RSur:(Face:(Brp:(Pad.1;0:(Brp:(Sketch.1;2)))...)`, which is unstable across
+releases *and* across edits to the model. Without a way to resolve geometry
+live, a client ends up filleting "the last feature" instead of the edge that
+was asked for.
 
-**3. COM threading was left to chance.**
-`pythoncom.CoInitialize()` ran on whichever thread happened to call first, while
-MCP handlers run on a thread pool. There was also no handling of
-`RPC_E_CALL_REJECTED` — the error CATIA returns whenever a modal dialog is open
-— so any call that landed at the wrong moment simply failed.
+**3. COM threading is easy to get wrong.**
+`pythoncom.CoInitialize()` is per-thread, while MCP handlers run on a thread
+pool — so a proxy obtained on one thread is routinely used from another. And
+CATIA rejects calls outright with `RPC_E_CALL_REJECTED` whenever a modal dialog
+is open, which a native client handles with an `IMessageFilter` and Python
+cannot.
 
-**4. Enumeration values were hardcoded with no fallback.**
-CATIA's automation constants are not exposed through COM, so every client
-hardcodes them; when one is wrong the failure is often *silent* (a capture
-written as CGM into a `.jpg`, a minimal-propagation fillet where you asked for
-tangency).
+**4. Enumeration values are not exposed.**
+CATIA's automation constants cannot be read through COM, so every client
+hardcodes the integers; when one is wrong the failure is often *silent* — a
+capture written as CGM into a `.jpg`, a minimal-propagation fillet where you
+asked for tangency.
 
-**5. Results were prose, not data.**
+**5. Prose results are hard to chain.**
 `"Pad created: 20 mm (normal). Feature: 'Pad.1'"` is fine for a human and poor
 for a model that has to decide what to do next.
 
-Everything below is how those are addressed, plus the substantially wider tool
-surface that became practical once the foundations were right.
+Everything below is how this server addresses them.
 
 ---
 

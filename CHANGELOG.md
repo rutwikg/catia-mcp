@@ -50,9 +50,7 @@
 
 ## 1.0.0
 
-First release. A ground-up implementation, written after reviewing
-[an earlier implementation](https://example.invalid/prior-art);
-no code is shared with it.
+First release.
 
 ### Correctness
 
