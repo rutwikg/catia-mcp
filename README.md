@@ -1,5 +1,7 @@
 # catia-mcp
 
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 A Model Context Protocol server that lets an AI assistant drive **CATIA** on a
 Windows machine through its COM automation interface.
 
@@ -386,5 +388,14 @@ python scripts/protocol_check.py
 
 ## Licence
 
-MIT. CATIA is a registered trademark of Dassault Systèmes; this project is not
-affiliated with or endorsed by them.
+**GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later). See
+[LICENSE](LICENSE).
+
+The AGPL's network clause is the point: if you run a modified version of this
+server so that others interact with it over a network, you have to offer them
+its source. Using it privately, or driving your own CATIA with it, carries no
+such obligation.
+
+CATIA is a registered trademark of Dassault Systèmes. This project automates
+CATIA; it neither includes nor replaces it, and is not affiliated with or
+endorsed by them. You need your own CATIA installation and licence.
